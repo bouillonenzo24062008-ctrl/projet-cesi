@@ -5,7 +5,7 @@ DI = Pin(17, Pin.OUT)
 DE = Pin(25, Pin.OUT)
 RE = Pin(26, Pin.OUT)
 
-RE.value(1)   # l'émetteur n'écoute pas
+RE.value(1)
 
 while True:
     DE.value(1); DI.value(1); print("J'envoie 1")
