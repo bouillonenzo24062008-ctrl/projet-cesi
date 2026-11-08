@@ -1,0 +1,286 @@
+"""
+test_materiel.py
+
+Petit programme MicroPython pour verifier uniquement :
+- l'ecran LCD 16x2 I2C,
+- une sonde DHT11,
+- le driver MAX485 en auto-ecoute locale.
+
+Le test RS485 active en meme temps :
+- DE = 1  -> emission active
+- /RE = 0 -> reception active
+
+Ainsi, meme sans liaison connectee vers une autre carte, le MAX485
+peut relire localement ce qu'il est en train d'imposer sur le bus.
+"""
+
+from machine import Pin, UART
+import time
+
+from config import (
+    DHT22_GPIO,
+    LCD_I2C_ADDR,
+    LCD_I2C_FREQ,
+    LCD_I2C_ID,
+    LCD_I2C_SCL_GPIO,
+    LCD_I2C_SDA_GPIO,
+    LCD_COLUMNS,
+    LCD_ROWS,
+    TX_GPIO,
+    RX_GPIO,
+    DE_GPIO,
+    RE_GPIO,
+    UART_ID,
+    MAX_UART_BAUD,
+)
+from lcd_display import StationDisplay
+
+
+# Le projet principal nomme cette broche DHT22_GPIO.
+# Pour ce test materiel, on reutilise la meme GPIO avec un DHT11.
+DHT11_GPIO = DHT22_GPIO
+
+
+class DHT11Probe:
+    MIN_READ_INTERVAL_MS = 1500
+
+    def __init__(self, gpio):
+        self.gpio = gpio
+        self.sensor = None
+        self.error = None
+        self.last_data = None
+        self.last_read_ms = 0
+        self._setup()
+
+    def _setup(self):
+        try:
+            import dht
+
+            self.sensor = dht.DHT11(Pin(self.gpio))
+            self.error = None
+        except Exception as exc:
+            self.sensor = None
+            self.error = "init DHT11: {}".format(exc)
+
+    def read(self, force=False):
+        if self.sensor is None:
+            self._setup()
+            if self.sensor is None:
+                return None
+
+        now = time.ticks_ms()
+        if not force and self.last_data is not None:
+            if time.ticks_diff(now, self.last_read_ms) < self.MIN_READ_INTERVAL_MS:
+                return self.last_data
+
+        try:
+            self.sensor.measure()
+            self.last_data = {
+                "temperature_c": float(self.sensor.temperature()),
+                "humidity_pct": float(self.sensor.humidity()),
+            }
+            self.last_read_ms = now
+            self.error = None
+            return self.last_data
+        except Exception as exc:
+            self.error = "lecture DHT11: {}".format(exc)
+            return self.last_data
+
+
+class RS485LoopbackTest:
+    def __init__(self, tx_gpio, rx_gpio, de_gpio, re_gpio, uart_id=UART_ID, baud=MAX_UART_BAUD):
+        self.tx_gpio = tx_gpio
+        self.rx_gpio = rx_gpio
+        self.de_pin = Pin(de_gpio, Pin.OUT, value=0)
+        self.re_pin = Pin(re_gpio, Pin.OUT, value=0)
+        self.baud = int(baud)
+        self.counter = 0
+        self.uart = UART(
+            uart_id,
+            baudrate=self.baud,
+            bits=8,
+            parity=None,
+            stop=1,
+            tx=Pin(self.tx_gpio),
+            rx=Pin(self.rx_gpio),
+            timeout=20,
+            timeout_char=2,
+        )
+        self.set_idle_mode()
+
+    def set_idle_mode(self):
+        self.de_pin.value(0)
+        self.re_pin.value(0)
+
+    def set_local_echo_mode(self):
+        self.de_pin.value(1)
+        self.re_pin.value(0)
+
+    def close(self):
+        self.set_idle_mode()
+        try:
+            self.uart.deinit()
+        except Exception:
+            pass
+
+    def _drain_rx(self):
+        while self.uart.any():
+            chunk = self.uart.read()
+            if not chunk:
+                break
+
+    def run_once(self):
+        self.counter = (self.counter + 1) & 0xFF
+        payload = bytes((0x55, 0xAA, 0xF0, 0x0F, self.counter))
+        rx = bytearray()
+
+        self._drain_rx()
+        self.set_local_echo_mode()
+        time.sleep_ms(2)
+
+        try:
+            written = self.uart.write(payload)
+            deadline = time.ticks_add(
+                time.ticks_ms(),
+                ((len(payload) * 10 * 1000) // self.baud) + 30,
+            )
+            while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+                waiting = self.uart.any()
+                if waiting:
+                    chunk = self.uart.read(waiting)
+                    if chunk:
+                        rx.extend(chunk)
+                        if len(rx) >= len(payload):
+                            break
+                time.sleep_ms(2)
+        finally:
+            self.set_idle_mode()
+
+        received = bytes(rx)
+        write_ok = written == len(payload) or written is None
+        return {
+            "ok": write_ok and received == payload,
+            "tx": payload,
+            "rx": received,
+        }
+
+
+def bytes_to_hex(data):
+    if not data:
+        return "-"
+    return " ".join("{:02X}".format(value) for value in data)
+
+
+def create_display():
+    display = StationDisplay(
+        enabled=True,
+        i2c_id=LCD_I2C_ID,
+        scl_gpio=LCD_I2C_SCL_GPIO,
+        sda_gpio=LCD_I2C_SDA_GPIO,
+        freq=LCD_I2C_FREQ,
+        address=LCD_I2C_ADDR,
+        columns=LCD_COLUMNS,
+        rows=LCD_ROWS,
+    )
+
+    if display.available():
+        display.write_line(0, "Test LCD 16x2")
+        display.write_line(1, "1234567890ABCDEF")
+        time.sleep_ms(1200)
+
+    return display
+
+
+def render_display(display, dht_data, rs485_result):
+    if not display.available():
+        return
+
+    if dht_data is None:
+        line1 = "DHT11 erreur"
+    else:
+        line1 = "T:{:.1f}C H:{:.0f}%".format(
+            dht_data["temperature_c"],
+            dht_data["humidity_pct"],
+        )
+
+    if rs485_result["ok"]:
+        line2 = "RS485 OK {:02X}".format(rs485_result["tx"][-1])
+    else:
+        line2 = "RS485 KO {:02d}".format(len(rs485_result["rx"]))
+
+    display.write_line(0, line1)
+    display.write_line(1, line2)
+
+
+def print_startup(display):
+    if display.available():
+        print("LCD OK    : I2C 0x{:02X}".format(display.address))
+    else:
+        print("LCD KO    : {}".format(display.error or "initialisation impossible"))
+
+    print("DHT11 GPIO:", DHT11_GPIO)
+    print(
+        "RS485     : UART{} TX={} RX={} DE={} /RE={} baud={}".format(
+            UART_ID,
+            TX_GPIO,
+            RX_GPIO,
+            DE_GPIO,
+            RE_GPIO,
+            MAX_UART_BAUD,
+        )
+    )
+    print("Arret avec Ctrl+C")
+
+
+def main():
+    display = create_display()
+    dht11 = DHT11Probe(DHT11_GPIO)
+    rs485 = RS485LoopbackTest(
+        tx_gpio=TX_GPIO,
+        rx_gpio=RX_GPIO,
+        de_gpio=DE_GPIO,
+        re_gpio=RE_GPIO,
+    )
+
+    print_startup(display)
+
+    cycle = 0
+    try:
+        while True:
+            cycle += 1
+            dht_data = dht11.read(force=True)
+            rs485_result = rs485.run_once()
+            render_display(display, dht_data, rs485_result)
+
+            print("")
+            print("Cycle {}".format(cycle))
+            if dht_data is None:
+                print("DHT11 KO  :", dht11.error or "aucune mesure")
+            else:
+                print(
+                    "DHT11 OK  : {:.1f} C / {:.0f} %".format(
+                        dht_data["temperature_c"],
+                        dht_data["humidity_pct"],
+                    )
+                )
+                if dht11.error:
+                    print("DHT11 note:", dht11.error)
+
+            print(
+                "RS485 {} : TX={} RX={}".format(
+                    "OK " if rs485_result["ok"] else "KO ",
+                    bytes_to_hex(rs485_result["tx"]),
+                    bytes_to_hex(rs485_result["rx"]),
+                )
+            )
+            time.sleep_ms(2500)
+    except KeyboardInterrupt:
+        rs485.close()
+        if display.available():
+            display.write_line(0, "Test arrete")
+            display.write_line(1, "Bus au repos")
+        print("")
+        print("Test arrete.")
+
+
+main()
