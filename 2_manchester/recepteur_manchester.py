@@ -6,31 +6,6 @@ def validate_bits(bits):
         raise ValueError("La chaine doit ne contenir que '0' et '1'.")
     return bits
 
-def bits_from_bytes(data):
-    return ''.join(f'{b:08b}' for b in data)
-
-def bytes_from_bits(bits):
-    bits = validate_bits(bits)
-    n = (len(bits) // 8) * 8
-    bits = bits[:n]
-    return bytes([int(bits[i:i+8], 2) for i in range(0, n, 8)])
-
-def ascii_bytes(text):
-    for c in text:
-        if ord(c) > 127:
-            raise ValueError("Caractere non-ASCII : " + c)
-    return text.encode()
-
-def manchester_encode(bits):
-    bits = validate_bits(bits)
-    m = ""
-    for b in bits:
-        if b == "1":
-            m = m + "10"
-        else:
-            m = m + "01"
-    return m
-
 def manchester_decode(mbits):
     mbits = validate_bits(mbits)
     if len(mbits) % 2 != 0:
@@ -46,24 +21,29 @@ def manchester_decode(mbits):
             raise ValueError("Paire invalide : " + paire)
     return bits
 
+def bytes_from_bits(bits):
+    bits = validate_bits(bits)
+    n = (len(bits) // 8) * 8
+    bits = bits[:n]
+    return bytes([int(bits[i:i+8], 2) for i in range(0, n, 8)])
+
 RO = Pin(16, Pin.IN)
 DE = Pin(25, Pin.OUT)
 RE = Pin(26, Pin.OUT)
-DE.value(0)                  
-RE.value(0)                   
+DE.value(0)                
+RE.value(0)              
 
-DEMI_BIT_US = 50000         
+DEMI_BIT_US = 50000           
 SPS = 10                     
 PERIODE = DEMI_BIT_US // SPS  
-
 def lire_signal(debut):
     signal = []
     repos = 0
     k = 0
-    while repos < 4 * SPS:                 
+    while repos < 4 * SPS:               
         instant = time.ticks_add(debut, k * PERIODE + PERIODE // 2)
         while time.ticks_diff(instant, time.ticks_us()) > 0:
-            pass                         
+            pass                          
         v = RO.value()
         signal.append(v)
         if v == 1:
