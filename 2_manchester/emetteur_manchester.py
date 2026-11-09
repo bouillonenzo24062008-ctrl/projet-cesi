@@ -1,25 +1,20 @@
 from machine import Pin
 import time
 
+# ================= Fonctions du cours (Workshop 6) =================
 def validate_bits(bits):
     if not set(bits).issubset({'0', '1'}):
         raise ValueError("La chaine doit ne contenir que '0' et '1'.")
     return bits
-
-def bits_from_bytes(data):
-    return ''.join(f'{b:08b}' for b in data)
-
-def bytes_from_bits(bits):
-    bits = validate_bits(bits)
-    n = (len(bits) // 8) * 8
-    bits = bits[:n]
-    return bytes([int(bits[i:i+8], 2) for i in range(0, n, 8)])
 
 def ascii_bytes(text):
     for c in text:
         if ord(c) > 127:
             raise ValueError("Caractere non-ASCII : " + c)
     return text.encode()
+
+def bits_from_bytes(data):
+    return ''.join(f'{b:08b}' for b in data)
 
 def manchester_encode(bits):
     bits = validate_bits(bits)
@@ -31,44 +26,31 @@ def manchester_encode(bits):
             m = m + "01"
     return m
 
-def manchester_decode(mbits):
-    mbits = validate_bits(mbits)
-    if len(mbits) % 2 != 0:
-        raise ValueError("Longueur impaire")
-    bits = ""
-    for i in range(0, len(mbits), 2):
-        paire = mbits[i:i+2]
-        if paire == "10":
-            bits = bits + "1"
-        elif paire == "01":
-            bits = bits + "0"
-        else:
-            raise ValueError("Paire invalide : " + paire)
-    return bits
-
+# ================= Station emettrice =================
 DI = Pin(17, Pin.OUT)
 DE = Pin(25, Pin.OUT)
 RE = Pin(26, Pin.OUT)
-RE.value(1)
-DE.value(0)                  
+RE.value(1)                   # l'emetteur n'ecoute pas
+DE.value(0)                   # au repos, la station lache la ligne
+
 STATION = "S01"
-DEMI_BIT_US = 50000         
+DEMI_BIT_US = 50000           # duree d'un demi-bit en microsecondes (50 ms, 1 bit = 100 ms)
 
 def envoyer_trame(texte):
-    bits = bits_from_bytes(ascii_bytes(texte))    
-    mbits = manchester_encode("0" + bits)         
-    DE.value(1)                                  
-    DI.value(1)                                    
+    bits = bits_from_bytes(ascii_bytes(texte))     # texte -> ASCII -> bits
+    mbits = manchester_encode("0" + bits)          # bit de synchro "0" + Manchester
+    DE.value(1)                                    # on prend la ligne
+    DI.value(1)                                    # repos
     time.sleep_us(6 * DEMI_BIT_US)
     debut = time.ticks_us()
-    for k in range(len(mbits)):                   
+    for k in range(len(mbits)):                    # un demi-bit toutes les 50 ms
         DI.value(int(mbits[k]))
         instant = time.ticks_add(debut, (k + 1) * DEMI_BIT_US)
         while time.ticks_diff(instant, time.ticks_us()) > 0:
-            pass                                  
-    DI.value(1)                                   
+            pass                                   # on attend la fin du demi-bit
+    DI.value(1)                                    # retour au repos
     time.sleep_us(4 * DEMI_BIT_US)
-    DE.value(0)                              
+    DE.value(0)                                    # on relache la ligne
 
 while True:
     msg = input("Message a envoyer (ex: OK) : ")
