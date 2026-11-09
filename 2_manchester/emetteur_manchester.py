@@ -1,7 +1,7 @@
 from machine import Pin
 import time
 
-# ================= Fonctions du cours (Workshop 6) =================
+
 def validate_bits(bits):
     if not set(bits).issubset({'0', '1'}):
         raise ValueError("La chaine doit ne contenir que '0' et '1'.")
@@ -26,31 +26,31 @@ def manchester_encode(bits):
             m = m + "01"
     return m
 
-# ================= Station emettrice =================
+
 DI = Pin(17, Pin.OUT)
 DE = Pin(25, Pin.OUT)
 RE = Pin(26, Pin.OUT)
-RE.value(1)                   # l'emetteur n'ecoute pas
-DE.value(0)                   # au repos, la station lache la ligne
+RE.value(1)                 
+DE.value(0)                   
 
 STATION = "S01"
-DEMI_BIT_US = 50000           # duree d'un demi-bit en microsecondes (50 ms, 1 bit = 100 ms)
+DEMI_BIT_US = 50000           
 
 def envoyer_trame(texte):
-    bits = bits_from_bytes(ascii_bytes(texte))     # texte -> ASCII -> bits
-    mbits = manchester_encode("0" + bits)          # bit de synchro "0" + Manchester
-    DE.value(1)                                    # on prend la ligne
-    DI.value(1)                                    # repos
+    bits = bits_from_bytes(ascii_bytes(texte))    
+    mbits = manchester_encode("0" + bits)         
+    DE.value(1)                                   
+    DI.value(1)                                    
     time.sleep_us(6 * DEMI_BIT_US)
     debut = time.ticks_us()
-    for k in range(len(mbits)):                    # un demi-bit toutes les 50 ms
+    for k in range(len(mbits)):                    
         DI.value(int(mbits[k]))
         instant = time.ticks_add(debut, (k + 1) * DEMI_BIT_US)
         while time.ticks_diff(instant, time.ticks_us()) > 0:
-            pass                                   # on attend la fin du demi-bit
-    DI.value(1)                                    # retour au repos
+            pass                                   
+    DI.value(1)                                    
     time.sleep_us(4 * DEMI_BIT_US)
-    DE.value(0)                                    # on relache la ligne
+    DE.value(0)                                   
 
 while True:
     msg = input("Message a envoyer (ex: OK) : ")
