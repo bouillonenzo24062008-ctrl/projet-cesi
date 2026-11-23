@@ -1,7 +1,6 @@
 from machine import Pin, I2C
 import time, random, dht, sys, select
 
-# ================= Fonctions du cours (Workshop 6) =================
 def validate_bits(bits):
     if not set(bits).issubset({'0', '1'}):
         raise ValueError("La chaine doit ne contenir que '0' et '1'.")
@@ -44,45 +43,43 @@ def manchester_decode(mbits):
             raise ValueError("Paire invalide : " + paire)
     return bits
 
-# ================= Configuration =================
-STATION = "S02"          # <-- STATION 2 (sans capteur)
-VIVRES = 80                   # niveau de vivres en % (modifiable : taper V=75)
-MESSAGE = "OK"                # message d'etat (modifiable depuis la console)
-EMETTEUR = False              # False : reception seule (mettre True pour qu'elle envoie aussi)
-PERIODE_MS = 15000            # envoi automatique toutes les ~15 s
-DEMI_BIT = 10                 # duree d'un demi-bit en ms (1 bit = 20 ms)
-DEMI_BIT_US = DEMI_BIT * 1000 # meme duree, en microsecondes
+
+STATION = "S02"          
+VIVRES = 80                   
+MESSAGE = "OK"                
+EMETTEUR = False             
+PERIODE_MS = 15000            
+DEMI_BIT = 10                 
+DEMI_BIT_US = DEMI_BIT * 1000 
 
 DI = Pin(17, Pin.OUT)
 RO = Pin(16, Pin.IN)
 DE = Pin(25, Pin.OUT)
 RE = Pin(26, Pin.OUT)
-DE.value(0)                   # au repos, on lache la ligne
-RE.value(0)                   # on ecoute en permanence
+DE.value(0)                   
+RE.value(0)                   
 capteur = dht.DHT11(Pin(27))
 
-# ================= Ecran LCD (I2C : SCL = GPIO 18, SDA = GPIO 19) =================
 class EcranLCD:
-    # pilote simple d'un ecran 16x2 avec module I2C (PCF8574)
     def __init__(self, i2c, adresse):
         self.i2c = i2c
         self.adresse = adresse
         time.sleep_ms(50)
-        for i in range(3):              # sequence d'initialisation de l'ecran
+        for i in range(3):              
             self.demi_octet(0x30, 0)
             time.sleep_ms(5)
-        self.demi_octet(0x20, 0)        # passage en mode 4 bits
-        self.commande(0x28)             # 2 lignes
-        self.commande(0x0C)             # ecran allume, pas de curseur
-        self.commande(0x06)             # ecriture de gauche a droite
-        self.commande(0x01)             # effacer l'ecran
+        self.demi_octet(0x20, 0)        
+        self.commande(0x28)             
+        self.commande(0x0C)             
+        self.commande(0x06)             
+        self.commande(0x01)             
         time.sleep_ms(2)
 
     def envoyer(self, valeur):
-        self.i2c.writeto(self.adresse, bytes([valeur | 0x08]))   # 0x08 = retroeclairage
+        self.i2c.writeto(self.adresse, bytes([valeur | 0x08]))   
 
     def demi_octet(self, valeur, rs):
-        self.envoyer(valeur | rs | 0x04)     # impulsion sur la broche E de l'ecran
+        self.envoyer(valeur | rs | 0x04)     
         self.envoyer(valeur | rs)
 
     def octet(self, valeur, rs):
@@ -94,7 +91,7 @@ class EcranLCD:
 
     def ecrire_ligne(self, ligne, texte):
         texte = texte[:16]
-        texte = texte + " " * (16 - len(texte))   # on complete a 16 caracteres
+        texte = texte + " " * (16 - len(texte))   
         if ligne == 0:
             self.commande(0x80)
         else:
@@ -104,10 +101,10 @@ class EcranLCD:
 
 try:
     i2c = I2C(0, scl=Pin(18), sda=Pin(19), freq=100000)
-    adresses = i2c.scan()                # on cherche l'adresse de l'ecran
+    adresses = i2c.scan()               
     ecran = EcranLCD(i2c, adresses[0])
 except Exception:
-    ecran = None                         # pas d'ecran : le programme continue sans
+    ecran = None                         
     print("Ecran LCD non detecte")
 
 def sans_accents(texte):
@@ -134,36 +131,33 @@ def afficher(ligne1, ligne2):
     except Exception:
         pass
 
-# ================= Emission =================
 def envoyer_trame(texte):
-    bits = bits_from_bytes(utf8_bytes(texte))      # texte -> UTF-8 -> bits
-    mbits = manchester_encode("0" + bits)          # bit de synchro "0" + Manchester
-    DE.value(1)                                    # on prend la ligne
+    bits = bits_from_bytes(utf8_bytes(texte))     
+    mbits = manchester_encode("0" + bits)          
+    DE.value(1)                                    
     DI.value(1)
     time.sleep_ms(6 * DEMI_BIT)
     debut = time.ticks_us()
-    for k in range(len(mbits)):                    # un demi-bit toutes les DEMI_BIT ms
+    for k in range(len(mbits)):                    
         DI.value(int(mbits[k]))
         instant = time.ticks_add(debut, (k + 1) * DEMI_BIT_US)
         while time.ticks_diff(instant, time.ticks_us()) > 0:
             pass
     DI.value(1)
     time.sleep_ms(4 * DEMI_BIT)
-    DE.value(0)                                    # on relache la ligne
+    DE.value(0)                                    
 
-# ================= Reception =================
-SPS = 10                      # nombre de lectures par demi-bit (comme sps en cours)
-PERIODE = DEMI_BIT_US // SPS  # temps entre deux lectures
+SPS = 10                     
+PERIODE = DEMI_BIT_US // SPS 
 
 def lire_signal(debut):
-    # lit la ligne SPS fois par demi-bit, a partir de l'instant "debut"
     signal = []
     repos = 0
     k = 0
-    while repos < 4 * SPS:                  # 2 bits entiers au repos = fin de trame
+    while repos < 4 * SPS:               
         instant = time.ticks_add(debut, k * PERIODE + PERIODE // 2)
         while time.ticks_diff(instant, time.ticks_us()) > 0:
-            pass                            # on attend le moment de la lecture
+            pass                         
         v = RO.value()
         signal.append(v)
         if v == 1:
@@ -174,7 +168,6 @@ def lire_signal(debut):
     return signal
 
 def demi_bits_depuis_signal(signal):
-    # meme principe que decode_nrz : moyenne par paquet de SPS lectures
     m = ""
     for s in range(0, len(signal) - SPS + 1, SPS):
         moy = sum(signal[s:s+SPS]) / SPS
@@ -186,41 +179,38 @@ def demi_bits_depuis_signal(signal):
 
 def decoder_trame(signal):
     m = demi_bits_depuis_signal(signal)
-    # on garde les paires valides ; la premiere paire "11" = retour au repos
     mbits = ""
     for i in range(0, len(m) - 1, 2):
         if m[i:i+2] == "10" or m[i:i+2] == "01":
             mbits = mbits + m[i:i+2]
         else:
             break
-    bits = manchester_decode(mbits)                # Manchester -> bits (cours)
+    bits = manchester_decode(mbits)              
     if len(bits) < 9 or bits[0] != "0":
         raise ValueError("Bit de synchro absent")
-    return bytes_from_bits(bits[1:]).decode('utf-8')   # bits -> octets -> texte UTF-8
+    return bytes_from_bits(bits[1:]).decode('utf-8')   
 
 def ecouter_bus(duree_ms):
-    # renvoie l'instant ou une trame commence, ou None si la ligne reste au repos
     fin = time.ticks_add(time.ticks_ms(), duree_ms)
     while time.ticks_diff(fin, time.ticks_ms()) > 0:
         if RO.value() == 0:
             return time.ticks_us()
     return None
 
-# ================= Datagramme =================
 def construire_trame():
     try:
         capteur.measure()
         t = capteur.temperature()
         msg = MESSAGE
         if t > 30 and MESSAGE == "OK":
-            msg = "ALERTE"                         # alerte automatique si trop chaud
+            msg = "ALERTE"                       
     except Exception:
         t = "ERR"
         msg = "CAPTEUR"
     return "<" + STATION + ":T=" + str(t) + ";V=" + str(VIVRES) + ";MSG=" + msg + ">"
 
 def analyser_trame(texte):
-    corps = texte[1:-1]                            # on enleve < et >
+    corps = texte[1:-1]                            
     station, champs = corps.split(":", 1)
     donnees = {}
     for champ in champs.split(";"):
@@ -248,14 +238,12 @@ def traiter(signal):
     print("   Vivres      :", d.get("V", "?"), "%")
     print("   Etat        :", d.get("MSG", "?"))
 
-# ================= Saisie au clavier (console Thonny) =================
 clavier = select.poll()
 clavier.register(sys.stdin, select.POLLIN)
-flux = getattr(sys.stdin, "buffer", sys.stdin)   # lecture en octets (UTF-8)
+flux = getattr(sys.stdin, "buffer", sys.stdin)   
 saisie = b""
 
 def lire_clavier():
-    # renvoie une ligne tapee dans la console, ou None (sans bloquer le programme)
     global saisie
     while clavier.poll(0):
         c = flux.read(1)
@@ -277,7 +265,6 @@ AIDE = """Commandes (tapez puis Entree) :
   AIDE            -> afficher cette aide"""
 
 def traiter_commande(ligne):
-    # renvoie True si une nouvelle trame doit etre envoyee
     global VIVRES, MESSAGE
     ligne = ligne.strip().upper()
     if ligne == "AIDE":
@@ -291,7 +278,7 @@ def traiter_commande(ligne):
     for mot in ligne.split(" "):
         if mot == "":
             continue
-        if mot.startswith("V="):                   # partie vivres
+        if mot.startswith("V="):                  
             try:
                 nouveau_vivres = int(mot[2:])
             except ValueError:
@@ -300,12 +287,12 @@ def traiter_commande(ligne):
             if nouveau_vivres < 0 or nouveau_vivres > 100:
                 print("Les vivres doivent etre entre 0 et 100")
                 return False
-        else:                                      # partie message
+        else:                                      
             mots_message.append(mot)
     nouveau_message = " ".join(mots_message)
     if nouveau_message != "":
         for c in nouveau_message:
-            if c in "<>:;=":                       # ces caracteres decoupent la trame
+            if c in "<>:;=":                       
                 print("Caractere interdit dans le message :", c)
                 return False
         if len(nouveau_message) > 12:
@@ -317,10 +304,8 @@ def traiter_commande(ligne):
     afficher("V:" + str(VIVRES) + "% modifie", MESSAGE)
     return True
 
-# ================= Boucle principale =================
 print("Station", STATION, "prete")
 if EMETTEUR:
-    # ----- questions au demarrage -----
     afficher("Abri " + STATION, "Saisir vivres")
     while True:
         reponse = input("Vivres restants (0 a 100 %) : ").strip()
@@ -359,21 +344,21 @@ afficher("Abri " + STATION, "En attente...")
 prochain = time.ticks_add(time.ticks_ms(), random.randint(2000, 6000))
 a_envoyer = None
 if EMETTEUR:
-    a_envoyer = construire_trame()                 # premiere trame envoyee tout de suite
+    a_envoyer = construire_trame()                 
 
 while True:
-    ligne = lire_clavier()                         # l'utilisateur a-t-il tape quelque chose ?
+    ligne = lire_clavier()                        
     if ligne is not None:
         if traiter_commande(ligne):
-            a_envoyer = construire_trame()         # on envoie tout de suite la nouvelle trame
-    debut = ecouter_bus(5 * 2 * DEMI_BIT)          # on ecoute pendant 5 bits
-    if debut is not None:                          # bus occupe : quelqu'un parle
+            a_envoyer = construire_trame()        
+    debut = ecouter_bus(5 * 2 * DEMI_BIT)          
+    if debut is not None:                          
         if a_envoyer:
             print("Bus occupe -> envoi reporte")
             afficher("Bus occupe", "Envoi reporte")
         traiter(lire_signal(debut))
         continue
-    if a_envoyer:                                  # bus libre : on peut parler
+    if a_envoyer:                                 
         print("Bus libre -> envoi :", a_envoyer)
         envoyer_trame(a_envoyer)
         station, d = analyser_trame(a_envoyer)
@@ -382,4 +367,4 @@ while True:
         a_envoyer = None
         prochain = time.ticks_add(time.ticks_ms(), PERIODE_MS + random.randint(0, 3000))
     elif EMETTEUR and time.ticks_diff(time.ticks_ms(), prochain) >= 0:
-        a_envoyer = construire_trame()             # on prepare, envoi au prochain silence
+        a_envoyer = construire_trame()             
